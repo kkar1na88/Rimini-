@@ -1,0 +1,352 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>点击地图查看大图与地址 - 示例</title>
+
+<!-- 1. 引入 Leaflet 的 CSS 和 JS(免费开源地图库,不需要 API Key) -->
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+<style>
+  html, body { margin: 0; height: 100%; font-family: -apple-system, "Microsoft YaHei", sans-serif; }
+  #map { width: 100%; height: 100vh; }
+
+  /* 简单的圆点标记,取代之前的圆形缩略图 */
+  .thumb-marker {
+    width: 38px; height: 38px; border-radius: 50%;
+    background: #fff4dc; border: 2px solid #fff;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.25);
+    cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 20px;
+    transition: transform 0.2s ease;
+  }
+
+  /* 弹出的大图 + 地址,改成简单的白色卡片,不用深色遮罩 */
+  #lightbox {
+    display: none; position: fixed; inset: 0;
+    background: rgba(255,255,255,.9); z-index: 9999;
+    align-items: center; justify-content: center; flex-direction: column;
+  }
+  #lightbox img {
+    max-width: 80vw; max-height: 70vh;
+  }
+  #lightbox .address {
+    color: #333; margin-top: 12px; font-size: 15px; text-align: center;
+    max-width: 80vw;
+  }
+  #lightbox .address.loading {
+    color: #999; font-style: italic;
+  }
+  #lightbox .desc {
+    color: #555; margin-top: 8px; font-size: 14px; text-align: center;
+    max-width: 80vw; line-height: 1.6;
+  }
+  #lightbox .close {
+    position: absolute; top: 20px; right: 30px;
+    color: #333; font-size: 24px; cursor: pointer; background: none; border: none;
+  }
+
+  /* 左上角分类 tabs */
+  #tabs {
+    position: fixed; top: 16px; left: 16px; z-index: 1000;
+    display: flex; gap: 8px; flex-wrap: wrap;
+  }
+  .tab {
+    background: #fff; border: none; border-radius: 20px;
+    padding: 7px 16px; font-size: 14px; color: #555;
+    cursor: pointer; box-shadow: 0 2px 6px rgba(0,0,0,0.18);
+  }
+  .tab.active {
+    background: #333; color: #fff;
+  }
+</style>
+</head>
+<body>
+
+<div id="map"></div>
+
+<div id="tabs">
+  <button class="tab active" data-cat="全部">全部</button>
+  <button class="tab" data-cat="落地后办理❗️">落地后办理❗️</button>
+  <button class="tab" data-cat="景点">景点</button>
+  <button class="tab" data-cat="美食">美食</button>
+  <button class="tab" data-cat="购物">购物</button>
+  <button class="tab" data-cat="学校">学校</button>
+</div>
+
+<div id="lightbox">
+  <button class="close" onclick="closeLightbox()">&times;</button>
+  <img id="lightbox-img" src="" alt="">
+  <div id="lightbox-address" class="address"></div>
+  <div id="lightbox-desc" class="desc"></div>
+</div>
+
+<script>
+// 2. 你的数据:每个点包含 坐标、缩略图、大图、地址
+// 这就是你以后要替换成自己内容的部分
+const spots = [
+  {
+    lat: 44.0624, lng: 12.5700,
+    thumb: "https://images.unsplash.com/photo-1552832230-c0197dd311b5?w=200",
+    full:  "https://images.unsplash.com/photo-1552832230-c0197dd311b5?w=1200",
+    address: "Arco di Augusto, Via Augusto Cesare Bertola, 47921 Rimini RN, Italy",
+    icon: "🍝",
+    category: "学校",
+    desc: "学校食堂，只有中午开门，周一到周五营业"
+  },
+  {
+    lat: 44.0637, lng: 12.5692,
+    thumb: "https://images.unsplash.com/photo-1591878185093-8b6b0b3f0b0e?w=200",
+    full:  "https://images.unsplash.com/photo-1591878185093-8b6b0b3f0b0e?w=1200",
+    address: "Ponte di Tiberio, Piazzale Giulio Cesare, 47921 Rimini RN, Italy",
+    icon: "📖",
+    category: "学校"
+  },
+  {
+    lat: 44.0617, lng: 12.5695,
+    thumb: "https://images.unsplash.com/photo-1523906834658-6e24ef2386f9?w=200",
+    full:  "https://images.unsplash.com/photo-1523906834658-6e24ef2386f9?w=1200",
+    address: "Via Carlo Cattaneo, 17, 47921 Rimini RN, Italy",
+    icon: "🏫",
+    category: "学校",
+    desc: "考试一般在这里考"
+  },
+  {
+    lat: 44.0629, lng: 12.5655,
+    thumb: "https://images.unsplash.com/photo-1523906834658-6e24ef2386f9?w=200",
+    full:  "https://images.unsplash.com/photo-1523906834658-6e24ef2386f9?w=1200",
+    address: "Corso d'Augusto, 237, 47921 Rimini RN, Italy",
+    icon: "🏫",
+    category: "学校",
+    desc: "第一年一般上课都在这里"
+  },
+  {
+    lat: 44.0599, lng: 12.5644,
+    thumb: "https://images.unsplash.com/photo-1523906834658-6e24ef2386f9?w=200",
+    full:  "https://images.unsplash.com/photo-1523906834658-6e24ef2386f9?w=1200",
+    address: "Tempio Malatestiano, Via IV Novembre, 35, 47921 Rimini RN, Italy",
+    icon: "🏰",
+    category: "景点"
+  },
+  {
+    lat: 44.0634, lng: 12.5623,
+    thumb: "https://images.unsplash.com/photo-1523906834658-6e24ef2386f9?w=200",
+    full:  "https://images.unsplash.com/photo-1523906834658-6e24ef2386f9?w=1200",
+    address: "Tempio Malatestiano, Via IV Novembre, 35, 47921 Rimini RN, Italy",
+    icon: "🌉",
+    category: "景点"
+  },
+  {
+    lat: 44.0572, lng: 12.5711,
+    thumb: "https://images.unsplash.com/photo-1523906834658-6e24ef2386f9?w=200",
+    full:  "https://images.unsplash.com/photo-1523906834658-6e24ef2386f9?w=1200",
+    address: "Tempio Malatestiano, Via IV Novembre, 35, 47921 Rimini RN, Italy",
+    icon: "🚪",
+    category: "景点"
+  },
+  {
+    lat: 44.0818, lng: 12.5757,
+    thumb: "https://images.unsplash.com/photo-1523906834658-6e24ef2386f9?w=200",
+    full:  "https://images.unsplash.com/photo-1523906834658-6e24ef2386f9?w=1200",
+    address: "L.go Ruggero Boscovich, 10, 47921 Rimini RN, Italy",
+    icon: "⚓️",
+    category: "景点"
+  },
+  {
+    lat: 44.0727, lng: 12.5784,
+    thumb: "https://images.unsplash.com/photo-1523906834658-6e24ef2386f9?w=200",
+    full:  "https://images.unsplash.com/photo-1523906834658-6e24ef2386f9?w=1200",
+    address: "L.go Ruggero Boscovich, 10, 47921 Rimini RN, Italy",
+    icon: "⛲️",
+    category: "景点"
+  },
+  {
+    lat: 44.06244, lng: 12.5567,
+    thumb: "https://images.unsplash.com/photo-1523906834658-6e24ef2386f9?w=200",
+    full:  "https://images.unsplash.com/photo-1523906834658-6e24ef2386f9?w=1200",
+    address: "Parco XXV aprile, Viale Tiberio, 47921 Rimini RN, Italy",
+    icon: "🌿",
+    category: "景点"
+  },
+  {
+    lat: 44.0621, lng: 12.5726,
+    thumb: "https://images.unsplash.com/photo-1523906834658-6e24ef2386f9?w=200",
+    full:  "https://images.unsplash.com/photo-1523906834658-6e24ef2386f9?w=1200",
+    address: "Via Carlo Cattaneo, 17, 47921 Rimini RN, Italy",
+    icon: "🍚",
+    category: "美食"
+  },
+  {
+    lat: 44.0598, lng: 12.5691,
+    thumb: "https://images.unsplash.com/photo-1523906834658-6e24ef2386f9?w=200",
+    full:  "https://images.unsplash.com/photo-1523906834658-6e24ef2386f9?w=1200",
+    address: "Vicolo San Michelino in Foro, 9, 47900 Rimini RN, Italy",
+    icon: "🍚",
+    category: "美食"
+  },
+  {
+    lat: 44.0630, lng: 12.5693,
+    thumb: "https://images.unsplash.com/photo-1523906834658-6e24ef2386f9?w=200",
+    full:  "https://images.unsplash.com/photo-1523906834658-6e24ef2386f9?w=1200",
+    address: "Via Alessandro Gambalunga, 58, 47921 Rimini RN, Italy",
+    icon: "📱",
+    category: "落地后办理❗️",
+    desc: "办手机卡，一个月七八欧左右，有时候也可以找老板换欧元"
+  },
+  {
+    lat: 44.0403, lng: 12.5889,
+    thumb: "https://images.unsplash.com/photo-1523906834658-6e24ef2386f9?w=200",
+    full:  "https://images.unsplash.com/photo-1523906834658-6e24ef2386f9?w=1200",
+    address: "Via Caduti di Nassiriya, 20, 47924 Rimini RN, Italy",
+    icon: "🛍️",
+    category: "购物"
+  },
+  {
+    lat: 44.0624, lng: 12.5688,
+    thumb: "https://images.unsplash.com/photo-1523906834658-6e24ef2386f9?w=200",
+    full:  "https://images.unsplash.com/photo-1523906834658-6e24ef2386f9?w=1200",
+    address: "Via Alessandro Gambalunga, 40, 47921 Rimini RN, Italy",
+    icon: "✉️",
+    category: "落地后办理❗️",
+    desc: "在这里拿Kit信封，去了先排号，门口有机器，然后看着屏幕等叫号，到了就跟工作人员说需要1个Kit，英语意大利语均可"
+  },
+  {
+    lat: 44.0774, lng: 12.5760,
+    thumb: "https://images.unsplash.com/photo-1523906834658-6e24ef2386f9?w=200",
+    full:  "https://images.unsplash.com/photo-1523906834658-6e24ef2386f9?w=1200",
+    address: "L.go Ruggero Boscovich, 47921 Rimini RN, Italy",
+    icon: "🎡",
+    category: "景点"
+  },
+  {
+    lat: 44.0563, lng: 12.5639,
+    thumb: "https://images.unsplash.com/photo-1523906834658-6e24ef2386f9?w=200",
+    full:  "https://images.unsplash.com/photo-1523906834658-6e24ef2386f9?w=1200",
+    address: "Via Aurelio Saffi, 44, 47923 Rimini RN, Italy",
+    icon: "🍣",
+    category: "美食"
+  },
+  {
+    lat: 44.0690, lng: 12.5805,
+    thumb: "https://images.unsplash.com/photo-1523906834658-6e24ef2386f9?w=200",
+    full:  "https://images.unsplash.com/photo-1523906834658-6e24ef2386f9?w=1200",
+    address: "Viale Amerigo Vespucci, 37/B, 47921 Rimini RN, Italy",
+    icon: "🍣",
+    category: "美食"
+  },
+  {
+    lat: 44.0644, lng: 12.5838,
+    thumb: "https://images.unsplash.com/photo-1523906834658-6e24ef2386f9?w=200",
+    full:  "https://images.unsplash.com/photo-1523906834658-6e24ef2386f9?w=1200",
+    address: "Viale Amerigo Vespucci, 119, 47921 Rimini RN, Italy",
+    icon: "🍣",
+    category: "美食"
+  },
+  {
+    lat: 44.0644, lng: 12.5839,
+    thumb: "https://images.unsplash.com/photo-1523906834658-6e24ef2386f9?w=200",
+    full:  "https://images.unsplash.com/photo-1523906834658-6e24ef2386f9?w=1200",
+    address: "Lungomare Claudio Tintori, 34B, 47921 Rimini RN, Italy",
+    icon: "🚶",
+    category: "景点"
+  },
+  {
+    lat: 44.0646, lng: 12.5842,
+    thumb: "https://images.unsplash.com/photo-1523906834658-6e24ef2386f9?w=200",
+    full:  "https://images.unsplash.com/photo-1523906834658-6e24ef2386f9?w=1200",
+    address: "Viale Amerigo Vespucci, 121, 47921 Rimini RN, Italy",
+    icon: "🛍️",
+    category: "购物",
+    desc: "DM，生活用品卖的什么都有"
+  },
+  {
+    lat: 44.0670, lng: 12.5813,
+    thumb: "https://images.unsplash.com/photo-1523906834658-6e24ef2386f9?w=200",
+    full:  "https://images.unsplash.com/photo-1523906834658-6e24ef2386f9?w=1200",
+    address: "Viale Amerigo Vespucci, 73, 47923 Rimini RN, Italy",
+    icon: "🍦",
+    category: "美食",
+    desc: "3Bis冰激凌，推荐COCO味道"
+  },
+  {
+    lat: 44.0620, lng: 12.5674,
+    thumb: "https://images.unsplash.com/photo-1523906834658-6e24ef2386f9?w=200",
+    full:  "https://images.unsplash.com/photo-1523906834658-6e24ef2386f9?w=1200",
+    address: "Piazza Luigi Ferrari, 5, 47921 Rimini RN, Italy",
+    icon: "🍦",
+    category: "美食",
+    desc: "市中心冰激凌店，推荐开心果味和酸奶味"
+  }
+];
+
+// 3. 初始化地图,设置初始视角(里米尼城区中心,15 是街道级缩放)
+const map = L.map('map').setView([44.0605, 12.5690], 14);
+
+// 3.1 (可选)限制用户拖动/缩小地图时不能离开里米尼区域太远
+// 格式是 [[南边界纬度, 西边界经度], [北边界纬度, 东边界经度]]
+const riminiBounds = [[44.02, 12.52], [44.10, 12.62]];
+map.setMaxBounds(riminiBounds);
+map.setMinZoom(13);
+
+// 4. 加载 MapTiler streets-v2 底图,风格接近 Google Maps
+// 【重要】把下面 YOUR_MAPTILER_API_KEY 换成你自己在 maptiler.com 拿到的 Key
+L.tileLayer('https://api.maptiler.com/maps/basic-v2/{z}/{x}/{y}.png?key=uQIiuszChRaxXJd7ouPD', {
+  attribution: '&copy; <a href="https://www.maptiler.com/">MapTiler</a> &copy; OpenStreetMap 贡献者',
+  maxZoom: 17
+}).addTo(map);
+
+// 5. 遍历数据,给每个点创建一个"缩略图标记"并绑定点击事件
+// markerRefs 用来记住每个 marker 对应的分类,方便后面按 tab 筛选显示/隐藏
+const markerRefs = [];
+
+spots.forEach(spot => {
+  const icon = L.divIcon({
+    className: '',
+    html: `<div class="thumb-marker" style="background:${spot.color || '#fff4dc'}">${spot.icon || ''}</div>`,
+    iconSize: [44, 44],
+    iconAnchor: [22, 22]
+  });
+
+  const marker = L.marker([spot.lat, spot.lng], { icon }).addTo(map);
+
+  // 点击标记时,打开大图 + 显示手写的地址和描述
+  marker.on('click', () => openLightbox(spot.full, spot.address, spot.desc));
+
+  markerRefs.push({ marker, category: spot.category || '其他' });
+});
+
+// 5.1 按分类筛选:符合条件的标记加回地图,不符合的从地图移除
+function filterByCategory(cat) {
+  markerRefs.forEach(({ marker, category }) => {
+    const shouldShow = (cat === '全部' || category === cat);
+    const isOnMap = map.hasLayer(marker);
+    if (shouldShow && !isOnMap) marker.addTo(map);
+    if (!shouldShow && isOnMap) map.removeLayer(marker);
+  });
+}
+
+// 5.2 给每个 tab 按钮绑定点击事件
+document.querySelectorAll('.tab').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.tab').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    filterByCategory(btn.dataset.cat);
+  });
+});
+
+// 6. 弹窗的显示/关闭逻辑
+function openLightbox(imgUrl, address, desc) {
+  document.getElementById('lightbox-img').src = imgUrl;
+  document.getElementById('lightbox-address').textContent = address;
+  document.getElementById('lightbox-desc').textContent = desc || '';
+  document.getElementById('lightbox').style.display = 'flex';
+}
+function closeLightbox() {
+  document.getElementById('lightbox').style.display = 'none';
+}
+</script>
+
+</body>
+</html>
